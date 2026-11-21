@@ -1,0 +1,106 @@
+{
+  "name": "pgrelay",
+  "version": "0.0.0",
+  "description": "A transactional outbox for Postgres that proves it. Events commit with your data or not at all, are never skipped by a late commit, stay in order per key, and survive kill -9.",
+  "keywords": [
+    "outbox",
+    "transactional-outbox",
+    "outbox-pattern",
+    "postgres",
+    "postgresql",
+    "events",
+    "event-driven",
+    "webhooks",
+    "dual-write",
+    "at-least-once",
+    "message-relay",
+    "drizzle",
+    "drizzle-orm",
+    "postgres-js",
+    "typescript"
+  ],
+  "license": "MIT",
+  "author": "Rajan Aggarwal",
+  "homepage": "https://github.com/rajanaggarwal11/pgrelay#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rajanaggarwal11/pgrelay.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rajanaggarwal11/pgrelay/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "pgrelay": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./drizzle": {
+      "types": "./dist/drizzle.d.ts",
+      "default": "./dist/drizzle.js"
+    },
+    "./postgres-js": {
+      "types": "./dist/postgres-js.d.ts",
+      "default": "./dist/postgres-js.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
+    "attw": "attw --pack . --ignore-rules no-resolution cjs-resolves-to-esm",
+    "publint": "publint",
+    "prepublishOnly": "pnpm build"
+  },
+  "peerDependencies": {
+    "drizzle-orm": ">=0.30.0",
+    "postgres": ">=3.4.0"
+  },
+  "peerDependenciesMeta": {
+    "drizzle-orm": {
+      "optional": true
+    },
+    "postgres": {
+      "optional": true
+    }
+  },
+  "optionalDependencies": {
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
+    "@changesets/changelog-github": "^1.0.1",
+    "@changesets/cli": "^3.0.2",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
+    "drizzle-orm": "^0.45.2",
+    "eslint": "^10.10.0",
+    "pg": "^8.13.1",
+    "postgres": "^3.4.9",
+    "prettier": "^3.4.2",
+    "publint": "^0.3.24",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.1",
+    "vitest": "^5.0.0"
+  },
+  "packageManager": "pnpm@11.22.0"
+}
