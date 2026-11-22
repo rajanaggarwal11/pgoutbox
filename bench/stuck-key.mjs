@@ -1,12 +1,12 @@
 // What one stuck key costs every poll: the README's "A key stuck behind a retry" table.
 //
 //   pnpm build
-//   BENCH_DATABASE_URL=postgres://postgres@localhost:5432/pgrelay_bench node bench/stuck-key.mjs
+//   BENCH_DATABASE_URL=postgres://postgres@localhost:5432/pgoutbox_bench node bench/stuck-key.mjs
 //
 // For each size, writes that many events for one key whose first event has failed and
 // waits an hour to retry, then 1,000 ready events for other keys, and reports what the
 // relay's claim and reap statements cost, from EXPLAIN (ANALYZE, BUFFERS). Creates and
-// drops a schema named pgrelay_bench.
+// drops a schema named pgoutbox_bench.
 import pg from "pg";
 import { migrate, Relay } from "../dist/index.js";
 
@@ -15,12 +15,12 @@ if (!url) {
   console.error("Set BENCH_DATABASE_URL to a Postgres you can create a schema in.");
   process.exit(2);
 }
-const table = { schema: "pgrelay_bench", table: "outbox" };
-const T = `"pgrelay_bench"."outbox"`;
+const table = { schema: "pgoutbox_bench", table: "outbox" };
+const T = `"pgoutbox_bench"."outbox"`;
 const db = new pg.Pool({ connectionString: url, max: 4 });
 
 async function setUp(stuck) {
-  await db.query(`DROP SCHEMA IF EXISTS pgrelay_bench CASCADE`);
+  await db.query(`DROP SCHEMA IF EXISTS pgoutbox_bench CASCADE`);
   await migrate(db, table);
   await db.query(
     `INSERT INTO ${T} (event_id, topic, key, payload)
@@ -88,5 +88,5 @@ for (const stuck of [2_000, 20_000, 200_000]) {
       `reap ${reap.ms.toFixed(2)} ms (${reap.buffers} buffers)`,
   );
 }
-await db.query(`DROP SCHEMA IF EXISTS pgrelay_bench CASCADE`);
+await db.query(`DROP SCHEMA IF EXISTS pgoutbox_bench CASCADE`);
 await db.end();

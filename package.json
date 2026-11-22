@@ -1,5 +1,5 @@
 {
-  "name": "pgrelay",
+  "name": "pgoutbox",
   "version": "0.0.0",
   "description": "A transactional outbox for Postgres. Events commit with your data or not at all, are never skipped by a late commit, stay in order per key, and survive kill -9.",
   "keywords": [
@@ -21,20 +21,20 @@
   ],
   "license": "MIT",
   "author": "Rajan Aggarwal",
-  "homepage": "https://github.com/rajanaggarwal11/pgrelay#readme",
+  "homepage": "https://github.com/rajanaggarwal11/pgoutbox#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/rajanaggarwal11/pgrelay.git"
+    "url": "git+https://github.com/rajanaggarwal11/pgoutbox.git"
   },
   "bugs": {
-    "url": "https://github.com/rajanaggarwal11/pgrelay/issues"
+    "url": "https://github.com/rajanaggarwal11/pgoutbox/issues"
   },
   "type": "module",
   "engines": {
     "node": ">=22.13"
   },
   "bin": {
-    "pgrelay": "./dist/cli.js"
+    "pgoutbox": "./dist/cli.js"
   },
   "exports": {
     ".": {

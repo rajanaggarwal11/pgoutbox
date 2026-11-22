@@ -1,10 +1,10 @@
 // Measures the numbers in the README's Performance section.
 //
 //   pnpm build
-//   BENCH_DATABASE_URL=postgres://postgres@localhost:5432/pgrelay_bench node bench/throughput.mjs
+//   BENCH_DATABASE_URL=postgres://postgres@localhost:5432/pgoutbox_bench node bench/throughput.mjs
 //
-// The handler does nothing, so this measures pgrelay and Postgres, not a broker. It
-// creates and drops a schema named pgrelay_bench; point it at a database you don't mind
+// The handler does nothing, so this measures pgoutbox and Postgres, not a broker. It
+// creates and drops a schema named pgoutbox_bench; point it at a database you don't mind
 // that happening in.
 import pg from "pg";
 import { enqueue, migrate, Relay } from "../dist/index.js";
@@ -14,14 +14,14 @@ if (!url) {
   console.error("Set BENCH_DATABASE_URL to a Postgres you can create a schema in.");
   process.exit(2);
 }
-const table = { schema: "pgrelay_bench", table: "outbox" };
+const table = { schema: "pgoutbox_bench", table: "outbox" };
 const EVENTS = Number(process.env.BENCH_EVENTS ?? 50_000);
 const admin = new pg.Pool({ connectionString: url, max: 4 });
 
 async function reset() {
-  await admin.query(`DROP SCHEMA IF EXISTS pgrelay_bench CASCADE`);
+  await admin.query(`DROP SCHEMA IF EXISTS pgoutbox_bench CASCADE`);
   await migrate(admin, table);
-  await admin.query(`CREATE TABLE pgrelay_bench.orders (id bigint PRIMARY KEY, total int)`);
+  await admin.query(`CREATE TABLE pgoutbox_bench.orders (id bigint PRIMARY KEY, total int)`);
 }
 
 async function fill(n, key) {
@@ -40,7 +40,7 @@ async function fill(n, key) {
   } finally {
     client.release();
   }
-  await admin.query(`VACUUM ANALYZE pgrelay_bench.outbox`);
+  await admin.query(`VACUUM ANALYZE pgoutbox_bench.outbox`);
 }
 
 async function enqueueRate(seconds = 5) {
@@ -51,7 +51,7 @@ async function enqueueRate(seconds = 5) {
   try {
     while (performance.now() < until) {
       await client.query("BEGIN");
-      await client.query("INSERT INTO pgrelay_bench.orders VALUES ($1, 1)", [n]);
+      await client.query("INSERT INTO pgoutbox_bench.orders VALUES ($1, 1)", [n]);
       await enqueue(client, { topic: "order.created", key: String(n), payload: { n } }, table);
       await client.query("COMMIT");
       n++;
@@ -90,7 +90,7 @@ async function relayRate(relays, key) {
   const elapsed = (performance.now() - start) / 1000;
   await Promise.all(pools.map((p) => p.end()));
   const { rows } = await admin.query(
-    `SELECT count(*)::int AS n FROM pgrelay_bench.outbox WHERE delivered_at IS NULL`,
+    `SELECT count(*)::int AS n FROM pgoutbox_bench.outbox WHERE delivered_at IS NULL`,
   );
   if (rows[0].n !== 0) throw new Error(`${rows[0].n} events not marked delivered`);
   return EVENTS / elapsed;
@@ -109,5 +109,5 @@ console.log(
 console.log(
   `4 relays, concurrency 50, 1,000 keys: ${fmt(await relayRate(4, (i) => `k${i % 1000}`))} events/s`,
 );
-await admin.query(`DROP SCHEMA IF EXISTS pgrelay_bench CASCADE`);
+await admin.query(`DROP SCHEMA IF EXISTS pgoutbox_bench CASCADE`);
 await admin.end();

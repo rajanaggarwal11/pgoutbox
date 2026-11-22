@@ -17,7 +17,7 @@ let table: TableOptions;
 
 beforeEach(async () => {
   db ??= pool();
-  table = await freshOutbox(db, "pgrelay_health");
+  table = await freshOutbox(db, "pgoutbox_health");
 });
 
 afterAll(async () => {
@@ -25,7 +25,7 @@ afterAll(async () => {
 });
 
 const age = (seconds: number) =>
-  db.query(`UPDATE pgrelay_health.outbox SET due_at = now() - make_interval(secs => $1)`, [
+  db.query(`UPDATE pgoutbox_health.outbox SET due_at = now() - make_interval(secs => $1)`, [
     seconds,
   ]);
 
@@ -119,7 +119,7 @@ describe("health", () => {
         table,
       ),
     );
-    await db.query(`UPDATE pgrelay_health.outbox SET dead_at = now()`);
+    await db.query(`UPDATE pgoutbox_health.outbox SET dead_at = now()`);
     expect(await retryDead(db, { ...table, ids: [ids[1]!] })).toBe(1);
     expect(await count(db, table, "dead_at IS NOT NULL")).toBe(1);
   });

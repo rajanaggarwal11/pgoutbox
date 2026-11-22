@@ -18,7 +18,7 @@ let table: TableOptions;
 
 beforeEach(async () => {
   db ??= pool();
-  table = await freshOutbox(db, "pgrelay_edges");
+  table = await freshOutbox(db, "pgoutbox_edges");
 });
 
 afterAll(async () => {
@@ -33,7 +33,7 @@ function relay(options: Partial<RelayOptions> & Pick<RelayOptions, "handler">): 
 async function openWriter(key: string, topic: string) {
   const client = await db.connect();
   await client.query("BEGIN");
-  await client.query(`INSERT INTO pgrelay_edges.orders VALUES ($1, 1)`, [topic]);
+  await client.query(`INSERT INTO pgoutbox_edges.orders VALUES ($1, 1)`, [topic]);
   await enqueue(client, { topic, key, payload: null }, table);
   return {
     commit: async () => {
@@ -118,7 +118,7 @@ describe("per-key exclusivity with late commits", () => {
         table,
       ),
     );
-    await expect(db.query(`UPDATE pgrelay_edges.outbox SET attempts = 1`)).rejects.toMatchObject({
+    await expect(db.query(`UPDATE pgoutbox_edges.outbox SET attempts = 1`)).rejects.toMatchObject({
       code: "23505",
     });
   });
@@ -144,7 +144,7 @@ describe("failures that must not go unrecorded", () => {
       process.off("unhandledRejection", listener);
     }
     expect(unhandled).toEqual([]);
-    const { rows } = await db.query(`SELECT last_error, locked_until FROM pgrelay_edges.outbox`);
+    const { rows } = await db.query(`SELECT last_error, locked_until FROM pgoutbox_edges.outbox`);
     expect(rows[0]).toEqual({ last_error: "Error: broker down", locked_until: null });
   });
 
@@ -167,7 +167,7 @@ describe("failures that must not go unrecorded", () => {
     await transaction(db, (tx) => enqueue(tx, { topic: "oom", key: "K", payload: null }, table));
     // Simulate three relays that claimed it and died: attempts used up, lease expired.
     await db.query(
-      `UPDATE pgrelay_edges.outbox SET attempts = 3, locked_until = now() - interval '1 second', locked_by = 'dead'`,
+      `UPDATE pgoutbox_edges.outbox SET attempts = 3, locked_until = now() - interval '1 second', locked_by = 'dead'`,
     );
     const seen: string[] = [];
     expect(
@@ -175,7 +175,7 @@ describe("failures that must not go unrecorded", () => {
     ).toBe(0);
     expect(seen).toEqual([]);
     const { rows } = await db.query<{ dead: boolean; last_error: string }>(
-      `SELECT dead_at IS NOT NULL AS dead, last_error FROM pgrelay_edges.outbox`,
+      `SELECT dead_at IS NOT NULL AS dead, last_error FROM pgoutbox_edges.outbox`,
     );
     expect(rows[0]!.dead).toBe(true);
     expect(rows[0]!.last_error).toMatch(/abandoned 3 times/);
@@ -241,7 +241,7 @@ describe("health without false alarms", () => {
     await transaction(db, (tx) =>
       enqueue(tx, { topic: "later", payload: null, delayMs: 3_600_000 }, table),
     );
-    await db.query(`UPDATE pgrelay_edges.outbox SET created_at = now() - interval '2 minutes'`);
+    await db.query(`UPDATE pgoutbox_edges.outbox SET created_at = now() - interval '2 minutes'`);
     const status = await assertOutboxHealthy(db, table);
     expect(status).toMatchObject({ pending: 1, scheduled: 1, oldestPending: null });
   });
@@ -249,7 +249,7 @@ describe("health without false alarms", () => {
   it("an event in flight on its first attempt is not 'never attempted'", async () => {
     await transaction(db, (tx) => enqueue(tx, { topic: "slow", payload: null }, table));
     await db.query(
-      `UPDATE pgrelay_edges.outbox SET attempts = 1, locked_until = now() + interval '1 minute', due_at = now() - interval '5 minutes'`,
+      `UPDATE pgoutbox_edges.outbox SET attempts = 1, locked_until = now() + interval '1 minute', due_at = now() - interval '5 minutes'`,
     );
     const error = await assertOutboxHealthy(db, table).catch((e: Error) => e);
     expect((error as Error).message).toContain(
@@ -261,7 +261,7 @@ describe("health without false alarms", () => {
   it("lag counts from when the event was written, not from when its transaction began", async () => {
     const client = await db.connect();
     await client.query("BEGIN");
-    await client.query(`INSERT INTO pgrelay_edges.orders VALUES ('o', 1)`);
+    await client.query(`INSERT INTO pgoutbox_edges.orders VALUES ('o', 1)`);
     await sleep(1200); // a slow transaction
     await enqueue(client, { topic: "t", payload: null }, table);
     await client.query("COMMIT");
@@ -313,7 +313,7 @@ describe("lifecycle and adapters", () => {
   });
 
   it("the Drizzle adapter leaves $n inside quoted names alone", async () => {
-    const odd = { schema: "pgrelay_edges", table: "events$2" };
+    const odd = { schema: "pgoutbox_edges", table: "events$2" };
     await migrate(db, odd);
     const d = drizzlePg(db);
     await d.transaction((tx) =>

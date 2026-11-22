@@ -1,7 +1,7 @@
 /**
  * The minimum a database client has to expose: `pg`'s `Client` / `PoolClient` /
  * `Pool` shape. postgres.js and Drizzle are wrapped to match it by the adapters in
- * `pgrelay/postgres-js` and `pgrelay/drizzle`, so the core never depends on a driver.
+ * `pgoutbox/postgres-js` and `pgoutbox/drizzle`, so the core never depends on a driver.
  */
 export interface SqlExecutor {
   query<T = Record<string, unknown>>(
@@ -14,7 +14,7 @@ export interface SqlExecutor {
 export interface TableOptions {
   /** Defaults to `public`. */
   schema?: string;
-  /** Defaults to `pgrelay_outbox`. */
+  /** Defaults to `pgoutbox`. */
   table?: string;
 }
 

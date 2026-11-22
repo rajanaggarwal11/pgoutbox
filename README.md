@@ -1,13 +1,13 @@
-# pgrelay
+# pgoutbox
 
 **A transactional outbox for Postgres.** Events commit with your data or not at all, are never skipped by a transaction that commits late, stay in order per key across any number of relays — and the test suite kills relays with `kill -9` mid-delivery to show nothing is lost.
 
-[![CI](https://github.com/rajanaggarwal11/pgrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/rajanaggarwal11/pgrelay/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/rajanaggarwal11/pgrelay/actions/workflows/codeql.yml/badge.svg)](https://github.com/rajanaggarwal11/pgrelay/actions/workflows/codeql.yml)
+[![CI](https://github.com/rajanaggarwal11/pgoutbox/actions/workflows/ci.yml/badge.svg)](https://github.com/rajanaggarwal11/pgoutbox/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/rajanaggarwal11/pgoutbox/actions/workflows/codeql.yml/badge.svg)](https://github.com/rajanaggarwal11/pgoutbox/actions/workflows/codeql.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 ```ts
-import { enqueue, Relay } from "pgrelay";
+import { enqueue, Relay } from "pgoutbox";
 
 // In the transaction that changes your data
 await client.query("BEGIN");
@@ -33,18 +33,18 @@ You save an order, then publish `order.created`. Between those two steps the pro
 
 The idea is simple. The ways to get it subtly wrong are not, and each one is silent:
 
-| What goes wrong                                                                                                                                                                                                                     | What pgrelay does                                                                                                          | Proved by                                                              |
+| What goes wrong                                                                                                                                                                                                                     | What pgoutbox does                                                                                                         | Proved by                                                              |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | `enqueue` is called with a pool instead of the transaction's client, so the event commits on its own — the dual write is back, and every test that doesn't roll back passes                                                         | Refuses, with `OutsideTransactionError`, **having written nothing**. Checked by Postgres, not by trusting the driver       | `test/enqueue.test.ts`, `test/adapters.test.ts`                        |
 | A poller remembers the last id it saw. Ids are handed out at insert, not at commit, so a transaction that commits late has an id the poller has already moved past. That event is never delivered                                   | No cursor. The relay asks which rows are still undelivered, so a late commit is just undelivered until it is delivered     | `test/relay.test.ts` — "no cursor, no gap"                             |
 | Several relays share the work and two of them deliver `order.paid` and `order.shipped` for the same order at the same time, in the wrong order — or a transaction that commits late slips its event in beside one already in flight | One event per key at a time, across every relay, enforced by a unique index in Postgres; a late commit waits its turn      | `test/ordering.test.ts` — 4 relays, 1,200 events; `test/edges.test.ts` |
 | A relay dies between publishing and recording it                                                                                                                                                                                    | Leases, not locks: the event is retried once the lease runs out. At-least-once, with a stable `event.id` to deduplicate on | `test/crash.test.ts` — real processes, `kill -9`                       |
-| The relay stops, or a handler fails on every attempt. Nothing errors; the table just grows                                                                                                                                          | `assertOutboxHealthy` and `npx pgrelay status` name the stuck event, its last error, and the key it is blocking            | `test/health.test.ts`, `test/cli.test.ts`                              |
+| The relay stops, or a handler fails on every attempt. Nothing errors; the table just grows                                                                                                                                          | `assertOutboxHealthy` and `npx pgoutbox status` name the stuck event, its last error, and the key it is blocking           | `test/health.test.ts`, `test/cli.test.ts`                              |
 
 ## Install
 
 ```bash
-npm install pgrelay
+npm install pgoutbox
 ```
 
 Works with [node-postgres](https://node-postgres.com), [postgres.js](https://github.com/porsager/postgres) and [Drizzle](https://orm.drizzle.team). Postgres 14 or later (CI runs 14–18), Node 22.13 or later.
@@ -52,31 +52,31 @@ Works with [node-postgres](https://node-postgres.com), [postgres.js](https://git
 Create the table once — on boot, or in a migration:
 
 ```ts
-import { migrate } from "pgrelay";
+import { migrate } from "pgoutbox";
 
-await migrate(pool); // CREATE TABLE IF NOT EXISTS public.pgrelay_outbox …
+await migrate(pool); // CREATE TABLE IF NOT EXISTS public.pgoutbox …
 ```
 
 `migrate` is safe to run from every process at once. When the table and its indexes already exist, it only reads the catalog and returns, taking no lock on the outbox, so a boot never waits behind transactions that are enqueueing. When something is missing, it creates it behind a transaction-scoped advisory lock, so ten processes booting together create the table once instead of failing on a duplicate catalog entry.
 
-Creating an index takes a SHARE lock on the table, which blocks writes to it until the index is built. On a new or small table that is milliseconds. On a large existing one, such as an outbox upgraded to a version with a new index, it is not: on 2 million rows (10,000 pending) each partial index took 0.13–0.15 s to build here, and `delivered` 0.54 s. For a big table, create the indexes `CONCURRENTLY` in a migration first. `npx pgrelay sql` prints each one; add `CONCURRENTLY` and run them outside a transaction:
+Creating an index takes a SHARE lock on the table, which blocks writes to it until the index is built. On a new or small table that is milliseconds. On a large existing one, such as an outbox upgraded to a version with a new index, it is not: on 2 million rows (10,000 pending) each partial index took 0.13–0.15 s to build here, and `delivered` 0.54 s. For a big table, create the indexes `CONCURRENTLY` in a migration first. `npx pgoutbox sql` prints each one; add `CONCURRENTLY` and run them outside a transaction:
 
 ```sql
-CREATE INDEX CONCURRENTLY IF NOT EXISTS "pgrelay_outbox_leased"
-  ON "public"."pgrelay_outbox" (locked_until)
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "pgoutbox_leased"
+  ON "public"."pgoutbox" (locked_until)
   WHERE locked_until IS NOT NULL AND delivered_at IS NULL AND dead_at IS NULL;
 ```
 
 `migrate` then finds everything in place and returns.
 
 ```bash
-npx pgrelay sql > migrations/0007_outbox.sql
+npx pgoutbox sql > migrations/0007_outbox.sql
 ```
 
 ## Writing events
 
 ```ts
-import { enqueue } from "pgrelay";
+import { enqueue } from "pgoutbox";
 
 const client = await pool.connect();
 try {
@@ -100,8 +100,8 @@ try {
 
 ```ts
 import postgres from "postgres";
-import { enqueue, migrate, Relay } from "pgrelay";
-import { withPostgresJs } from "pgrelay/postgres-js";
+import { enqueue, migrate, Relay } from "pgoutbox";
+import { withPostgresJs } from "pgoutbox/postgres-js";
 
 const sql = postgres(process.env.DATABASE_URL!);
 await migrate(withPostgresJs(sql));
@@ -119,8 +119,8 @@ new Relay(withPostgresJs(sql), { handler: async (event) => publish(event) }).sta
 
 ```ts
 import { drizzle } from "drizzle-orm/node-postgres";
-import { enqueue, migrate, Relay } from "pgrelay";
-import { withDrizzle } from "pgrelay/drizzle";
+import { enqueue, migrate, Relay } from "pgoutbox";
+import { withDrizzle } from "pgoutbox/drizzle";
 
 const db = drizzle(process.env.DATABASE_URL!);
 await migrate(withDrizzle(db));
@@ -137,7 +137,7 @@ new Relay(withDrizzle(db), { handler: async (event) => publish(event) }).start()
 Pass the transaction, never the pool or `db`. If you get it wrong:
 
 ```
-OutsideTransactionError: pgrelay: enqueue() was called outside a transaction, so the event would
+OutsideTransactionError: pgoutbox: enqueue() was called outside a transaction, so the event would
 commit on its own whether or not your other writes do. Nothing was written. Call it with the client
 or transaction object your BEGIN … COMMIT runs on (pool.connect() + BEGIN, sql.begin(),
 db.transaction()), not with a pool.
@@ -146,7 +146,7 @@ db.transaction()), not with a pool.
 ## Delivering events
 
 ```ts
-import { Relay } from "pgrelay";
+import { Relay } from "pgoutbox";
 
 const relay = new Relay(pool, {
   handler: async (event, { signal }) => {
@@ -173,7 +173,7 @@ Resolve to mark an event delivered; throw to retry it with exponential backoff. 
 | `pollIntervalMs`    | `1000`                             | Idle wait between polls, at least 10 ms. `relay.wake()` cuts it short                                                                         |
 | `keepDeliveredMs`   | 24 h                               | Delivered rows are kept this long for inspection, then deleted. `0` deletes on delivery                                                       |
 | `cleanupIntervalMs` | `60000`                            | How often delivered rows past `keepDeliveredMs` are deleted                                                                                   |
-| `schema`, `table`   | `public`, `pgrelay_outbox`         | Where the outbox lives                                                                                                                        |
+| `schema`, `table`   | `public`, `pgoutbox`               | Where the outbox lives                                                                                                                        |
 | `onError`           | `console.error`                    | Handler failures and database errors. The relay keeps running                                                                                 |
 
 For tests, scripts and serverless functions, `await relay.drain()` delivers everything due and returns the count.
@@ -189,18 +189,18 @@ For tests, scripts and serverless functions, `await relay.drain()` delivers ever
 
 ## Knowing when it's stuck
 
-An outbox doesn't fail loudly. It fills up. So pgrelay will tell you:
+An outbox doesn't fail loudly. It fills up. So pgoutbox will tell you:
 
 ```ts
 await assertOutboxHealthy(pool, { maxLagSeconds: 120 }); // in a health check or a cron job
 ```
 
 ```bash
-DATABASE_URL=postgres://app@db/prod npx pgrelay status
+DATABASE_URL=postgres://app@db/prod npx pgoutbox status
 ```
 
 ```
-pgrelay status · prod on db.internal
+pgoutbox status · prod on db.internal
 
   pending   172  (oldest waited 14m 3s)
   in flight 0
@@ -217,7 +217,7 @@ Exit codes: `0` healthy, `1` stuck or dead events, `2` could not run. `--json` f
 
 ## Performance
 
-Measured with [`bench/`](./bench) (`BENCH_DATABASE_URL=… pnpm bench`) and a handler that does nothing, so this measures pgrelay and Postgres, not a broker.
+Measured with [`bench/`](./bench) (`BENCH_DATABASE_URL=… pnpm bench`) and a handler that does nothing, so this measures pgoutbox and Postgres, not a broker.
 
 Machine: 13-inch MacBook Pro (Mac14,7), Apple M2, 8 cores, 8 GB, macOS 26.6, Node 24.4. Postgres 18.4 on the same machine, from the EDB installer, which is an x86_64 build running under Rosetta 2. Settings are `initdb` defaults: `fsync` and `synchronous_commit` on, `shared_buffers` 128 MB, `wal_sync_method` `open_datasync` (on macOS this does not flush the drive's own write cache; `fsync_writethrough` does). The machine was not idle while measuring (load average 5–15 from other work) and runs varied widely, so each row shows the median and the range of five runs:
 
@@ -242,20 +242,20 @@ The `leased` index that keeps reaping cheap has a write cost. Each claim adds on
 
 ## Why not pg-boss, graphile-worker, Debezium or @nestjs/outbox?
 
-If you already run one of them, you may not need pgrelay.
+If you already run one of them, you may not need pgoutbox.
 
-- **[pg-boss](https://github.com/timgit/pg-boss)** and **[graphile-worker](https://github.com/graphile/worker)** are job queues: a row is work for a worker to do, and they come with what job queues need, such as scheduling, cron and priorities. Both can add a job inside your transaction, which gives you most of an outbox. Per-key order is opt-in: pg-boss has a `key_strict_fifo` queue policy, and graphile-worker runs jobs that share a named queue one at a time, but advises against high-cardinality queue names such as ids. pgrelay records events, facts that already happened, and orders every keyed event by default, with keys meant to be aggregate ids: one per order, account or user.
-- **[Debezium](https://debezium.io)** reads the write-ahead log through logical decoding and a replication slot, and its outbox event router turns outbox rows into Kafka messages keyed by aggregate id. Nothing polls, and if you run Kafka Connect already it is the established choice. It needs that infrastructure, and the replication slot keeps WAL on the server while the connector is down. pgrelay is a library in your Node process and delivers to whatever your handler calls.
-- **[@nestjs/outbox](https://github.com/nestjs/outbox)** is a transactional outbox built as a Nest module, with Postgres and MySQL stores and an inbox for deduplication. On NestJS it fits right in. pgrelay doesn't need a framework; it takes a `pg` client, postgres.js or Drizzle.
+- **[pg-boss](https://github.com/timgit/pg-boss)** and **[graphile-worker](https://github.com/graphile/worker)** are job queues: a row is work for a worker to do, and they come with what job queues need, such as scheduling, cron and priorities. Both can add a job inside your transaction, which gives you most of an outbox. Per-key order is opt-in: pg-boss has a `key_strict_fifo` queue policy, and graphile-worker runs jobs that share a named queue one at a time, but advises against high-cardinality queue names such as ids. pgoutbox records events, facts that already happened, and orders every keyed event by default, with keys meant to be aggregate ids: one per order, account or user.
+- **[Debezium](https://debezium.io)** reads the write-ahead log through logical decoding and a replication slot, and its outbox event router turns outbox rows into Kafka messages keyed by aggregate id. Nothing polls, and if you run Kafka Connect already it is the established choice. It needs that infrastructure, and the replication slot keeps WAL on the server while the connector is down. pgoutbox is a library in your Node process and delivers to whatever your handler calls.
+- **[@nestjs/outbox](https://github.com/nestjs/outbox)** is a transactional outbox built as a Nest module, with Postgres and MySQL stores and an inbox for deduplication. On NestJS it fits right in. pgoutbox doesn't need a framework; it takes a `pg` client, postgres.js or Drizzle.
 
-What pgrelay adds is that its guarantees are tests against a real Postgres: no event skipped by a late commit, one event per key at a time enforced by a unique index, and nothing lost when relays are killed with `kill -9` mid-delivery. The table at the top lists them.
+What pgoutbox adds is that its guarantees are tests against a real Postgres: no event skipped by a late commit, one event per key at a time enforced by a unique index, and nothing lost when relays are killed with `kill -9` mid-delivery. The table at the top lists them.
 
 ## Design notes
 
-- **No cursor.** Identity values are assigned when a row is inserted, not when its transaction commits, so `WHERE id > $last` is a race that loses events quietly and forever. pgrelay keeps state per row (`delivered_at`) and asks for undelivered rows, using a partial index that only contains them.
+- **No cursor.** Identity values are assigned when a row is inserted, not when its transaction commits, so `WHERE id > $last` is a race that loses events quietly and forever. pgoutbox keeps state per row (`delivered_at`) and asks for undelivered rows, using a partial index that only contains them.
 - **Leases, not held locks.** `FOR UPDATE SKIP LOCKED` picks the rows, a lease records the claim, and the statement commits. A dead relay's events become claimable when the lease runs out; a live one's never get double-claimed.
 - **Keys serialise without coordination.** A started event holds its key; an unstarted one goes only when nothing for its key is started and nothing earlier is undelivered. The claim query applies that rule, and a partial unique index over "the started, unfinished event for this key" makes it a constraint: if two claims race on snapshots, one gets a unique violation and looks again. No locks held between statements, no coordinator, nothing but the table.
-- **The transaction check costs nothing in the common case.** The insert checks `pg_current_xact_id_if_assigned()` in the same statement: if your transaction has already written something, it is a transaction. Only if `enqueue` is the first write does pgrelay spend two more round trips: it gives the transaction an id and asks again. In a transaction block the id sticks; in autocommit it belonged to a statement that is already over. The same check decides both times, and nothing is ever forced through. (`statement_timestamp() <> transaction_timestamp()` looks like a cheaper test and is wrong over the extended query protocol, which every driver uses for parameterised queries.)
+- **The transaction check costs nothing in the common case.** The insert checks `pg_current_xact_id_if_assigned()` in the same statement: if your transaction has already written something, it is a transaction. Only if `enqueue` is the first write does pgoutbox spend two more round trips: it gives the transaction an id and asks again. In a transaction block the id sticks; in autocommit it belonged to a statement that is already over. The same check decides both times, and nothing is ever forced through. (`statement_timestamp() <> transaction_timestamp()` looks like a cheaper test and is wrong over the extended query protocol, which every driver uses for parameterised queries.)
 - **No `LISTEN/NOTIFY` by default.** `NOTIFY` serialises the commits of every transaction that sends one, which is a poor trade on your busiest write path. Polling an index of only undelivered rows is cheap; call `relay.wake()` when you know there is work.
 
 ## Reviewed adversarially
@@ -268,7 +268,7 @@ A second audit, also before the first release, measured the queries every relay 
 
 ```bash
 pnpm install
-TEST_DATABASE_URL=postgres://postgres@localhost:5432/pgrelay_test pnpm check
+TEST_DATABASE_URL=postgres://postgres@localhost:5432/pgoutbox_test pnpm check
 ```
 
 The tests need a real Postgres; there are no mocks. See [CONTRIBUTING.md](./CONTRIBUTING.md).

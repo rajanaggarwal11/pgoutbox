@@ -3,7 +3,7 @@ import type { SqlExecutor } from "./types.js";
 
 /**
  * Wraps a postgres.js `sql` (for a relay) or the `sql` that `sql.begin()` hands your
- * callback (for `enqueue`) as a pgrelay executor.
+ * callback (for `enqueue`) as a pgoutbox executor.
  *
  * ```ts
  * await sql.begin(async (tx) => {

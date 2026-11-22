@@ -8,6 +8,6 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   splitting: false,
-  // Drivers are optional: importing pgrelay must not pull any of them in.
+  // Drivers are optional: importing pgoutbox must not pull any of them in.
   external: ["drizzle-orm", "postgres", "pg"],
 });

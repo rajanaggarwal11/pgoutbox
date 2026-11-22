@@ -5,18 +5,18 @@ import { Relay } from "../src/relay.js";
 import type { SqlExecutor, TableOptions } from "../src/types.js";
 import { freshOutbox, pool } from "./helpers.js";
 
-// How much work the queries pgrelay runs on every poll do, measured as the buffers
+// How much work the queries pgoutbox runs on every poll do, measured as the buffers
 // EXPLAIN (ANALYZE, BUFFERS) reports, against tables shaped like the bad days they have
 // to survive. Buffer counts don't depend on machine speed, so these don't flake on a
 // slow runner the way a timing would.
 
 let db: pg.Pool;
 let table: TableOptions;
-const T = `"pgrelay_plans"."outbox"`;
+const T = `"pgoutbox_plans"."outbox"`;
 
 beforeEach(async () => {
   db ??= pool();
-  table = await freshOutbox(db, "pgrelay_plans");
+  table = await freshOutbox(db, "pgoutbox_plans");
 });
 
 afterAll(async () => {

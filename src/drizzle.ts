@@ -39,7 +39,7 @@ function toSql(text: string, params: readonly unknown[]): SQL {
     const index = Number(m[1]) - 1;
     if (index < 0 || index >= params.length) {
       throw new RangeError(
-        `pgrelay: query references $${m[1]} but has ${params.length} parameters`,
+        `pgoutbox: query references $${m[1]} but has ${params.length} parameters`,
       );
     }
     if (raw) chunks.push(sql.raw(raw));
@@ -52,7 +52,7 @@ function toSql(text: string, params: readonly unknown[]): SQL {
 }
 
 /**
- * Wraps a Drizzle database or transaction as a pgrelay executor. Works with Drizzle
+ * Wraps a Drizzle database or transaction as a pgoutbox executor. Works with Drizzle
  * over node-postgres and over postgres.js.
  *
  * ```ts

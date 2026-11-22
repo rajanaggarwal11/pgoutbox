@@ -21,7 +21,7 @@ beforeAll(() => {
 });
 
 beforeEach(async () => {
-  table = await freshOutbox(db, "pgrelay_adapters");
+  table = await freshOutbox(db, "pgoutbox_adapters");
 });
 
 afterAll(async () => {
@@ -32,7 +32,7 @@ afterAll(async () => {
 describe("postgres.js", () => {
   it("enqueues inside sql.begin and rolls back with it", async () => {
     await sql.begin(async (tx) => {
-      await tx`INSERT INTO pgrelay_adapters.orders VALUES ('o1', 1)`;
+      await tx`INSERT INTO pgoutbox_adapters.orders VALUES ('o1', 1)`;
       await enqueue(withPostgresJs(tx), { topic: "ok", key: "o1", payload: { n: 1 } }, table);
     });
     await sql
@@ -76,7 +76,7 @@ describe("Drizzle", () => {
   it("enqueues inside db.transaction over node-postgres, and refuses db itself", async () => {
     const d = drizzle(db);
     await d.transaction(async (tx) => {
-      await tx.execute(dsql`INSERT INTO pgrelay_adapters.orders VALUES ('o1', 1)`);
+      await tx.execute(dsql`INSERT INTO pgoutbox_adapters.orders VALUES ('o1', 1)`);
       await enqueue(
         withDrizzle(tx),
         { topic: "ok", payload: { n: 1 }, headers: { v: "2" } },
@@ -86,7 +86,7 @@ describe("Drizzle", () => {
     await expect(enqueue(withDrizzle(d), { topic: "t", payload: 1 }, table)).rejects.toBeInstanceOf(
       OutsideTransactionError,
     );
-    const { rows } = await db.query(`SELECT topic, payload, headers FROM pgrelay_adapters.outbox`);
+    const { rows } = await db.query(`SELECT topic, payload, headers FROM pgoutbox_adapters.outbox`);
     expect(rows).toEqual([{ topic: "ok", payload: { n: 1 }, headers: { v: "2" } }]);
   });
 
@@ -102,11 +102,11 @@ describe("Drizzle", () => {
 
   it("keeps parameters as parameters", async () => {
     const d = drizzle(db);
-    const nasty = "'); DROP TABLE pgrelay_adapters.orders; --";
+    const nasty = "'); DROP TABLE pgoutbox_adapters.orders; --";
     await d.transaction((tx) => enqueue(withDrizzle(tx), { topic: nasty, payload: nasty }, table));
-    const { rows } = await db.query(`SELECT topic FROM pgrelay_adapters.outbox`);
+    const { rows } = await db.query(`SELECT topic FROM pgoutbox_adapters.outbox`);
     expect(rows).toEqual([{ topic: nasty }]);
-    expect(await count(db, { schema: "pgrelay_adapters", table: "orders" })).toBe(0);
+    expect(await count(db, { schema: "pgoutbox_adapters", table: "orders" })).toBe(0);
   });
 });
 

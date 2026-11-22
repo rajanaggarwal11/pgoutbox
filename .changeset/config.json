@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/@changesets/config@3.0.0/schema.json",
-  "changelog": ["@changesets/changelog-github", { "repo": "rajanaggarwal11/pgrelay" }],
+  "changelog": ["@changesets/changelog-github", { "repo": "rajanaggarwal11/pgoutbox" }],
   "commit": false,
   "access": "public",
   "baseBranch": "main",
