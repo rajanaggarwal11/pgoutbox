@@ -13,7 +13,11 @@ export interface RelayOptions<P = unknown> extends TableOptions {
   handler: Handler<P>;
   /** Most events in flight at once, per relay. Defaults to 10. */
   concurrency?: number;
-  /** How long to wait between polls when there is nothing to do. Defaults to 1000 ms. */
+  /**
+   * How long to wait between polls when there is nothing to do. Defaults to 1000 ms;
+   * at least 10 ms. An idle relay runs one claim query per interval, so a very short
+   * one is a steady load on the database for nothing.
+   */
   pollIntervalMs?: number;
   /**
    * How long a claimed event belongs to this relay. If the process dies, another
@@ -64,6 +68,9 @@ interface ClaimedRow {
 /** The longest delay `setTimeout` honours; anything larger fires after 1 ms. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
 
+/** The shortest idle wait. Below this an idle relay is a busy loop against the database. */
+const MIN_POLL_INTERVAL_MS = 10;
+
 export function defaultBackoff(attempt: number): number {
   const base = Math.min(1000 * 2 ** Math.max(0, attempt - 1), 5 * 60_000);
   // Full jitter keeps a fleet of relays from retrying a failing broker in lockstep.
@@ -106,6 +113,16 @@ function statements(qualified: string) {
     // between two claims' snapshots ends in a unique violation (retried by the relay),
     // never in two handlers for one key.
     //
+    // The two rules are two separate checks, each answered by one index lookup that
+    // stops at the first match: "is a row for this key started" from `key_holder`
+    // (`h.key IS NOT NULL` lets the planner use it, or hash it once per claim), and "is a
+    // lower row for this key undelivered" from `pending_key`. Don't fold them into one
+    // `EXISTS (… attempts > 0 OR id < o.id)`: the planner answers that with a BitmapOr
+    // that collects every lower row of the key for every row it looks at, which is
+    // quadratic in a key's backlog (20,000 events behind one retrying event: 11 s per
+    // claim; test/plans.test.ts guards this). A started row skips both checks:
+    // `key_holder` is unique, so nothing else for its key can be started.
+    //
     // There is no cursor anywhere, so a row whose transaction commits late is simply
     // undelivered until it is delivered.
     //
@@ -119,10 +136,16 @@ function statements(qualified: string) {
     AND (o.locked_until IS NULL OR o.locked_until <= now())
     AND o.attempts < $5
     AND NOT (o.id = ANY(string_to_array($4::text, ',')::bigint[]))
-    AND (o.key IS NULL OR NOT EXISTS (
-      SELECT 1 FROM ${qualified} p
-      WHERE p.key = o.key AND p.id <> o.id AND p.delivered_at IS NULL AND p.dead_at IS NULL
-        AND (p.attempts > 0 OR (o.attempts = 0 AND p.id < o.id))
+    AND (o.key IS NULL OR o.attempts > 0 OR (
+      NOT EXISTS (
+        SELECT 1 FROM ${qualified} h
+        WHERE h.key = o.key AND h.key IS NOT NULL
+          AND h.attempts > 0 AND h.delivered_at IS NULL AND h.dead_at IS NULL
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM ${qualified} p
+        WHERE p.key = o.key AND p.id < o.id AND p.delivered_at IS NULL AND p.dead_at IS NULL
+      )
     ))
   ORDER BY o.id
   LIMIT $1
@@ -139,7 +162,9 @@ RETURNING o.id::text, o.event_id::text, o.topic, o.key, o.payload, o.headers, o.
 
     // An event whose lease ran out with no outcome recorded was abandoned: its relay
     // crashed, was killed, or ran past leaseMs. Once that has happened maxAttempts
-    // times, stop handing it out — it may be the thing killing the relays.
+    // times, stop handing it out — it may be the thing killing the relays. Only leased
+    // rows can qualify, and the `leased` index holds nothing else, so this reads a
+    // handful of index entries however large the backlog is.
     reap: `UPDATE ${qualified}
 SET dead_at = now(), locked_until = NULL, locked_by = NULL,
     last_error = coalesce(last_error || ' — then: ', '') ||
@@ -244,7 +269,18 @@ export class Relay<P = unknown> {
     this.sql = statements(resolveTable(options).qualified);
     this.handler = options.handler;
     this.concurrency = positiveInt("concurrency", options.concurrency, 10);
-    this.pollIntervalMs = nonNegative("pollIntervalMs", options.pollIntervalMs, 1000);
+    this.pollIntervalMs = options.pollIntervalMs ?? 1000;
+    if (
+      !Number.isFinite(this.pollIntervalMs) ||
+      this.pollIntervalMs < MIN_POLL_INTERVAL_MS ||
+      this.pollIntervalMs > MAX_TIMER_MS
+    ) {
+      // 0 would make an idle relay re-run its claim query back to back, and anything over
+      // MAX_TIMER_MS fires after 1 ms: both are a busy loop against the database.
+      throw new TypeError(
+        `pgrelay: pollIntervalMs must be between ${MIN_POLL_INTERVAL_MS} and ${MAX_TIMER_MS} ms, got ${this.pollIntervalMs}`,
+      );
+    }
     this.leaseMs = positiveInt("leaseMs", options.leaseMs, 30_000);
     if (this.leaseMs > MAX_TIMER_MS) {
       throw new TypeError(`pgrelay: leaseMs must be at most ${MAX_TIMER_MS} (about 24.8 days)`);

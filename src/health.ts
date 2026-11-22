@@ -1,9 +1,22 @@
-import { outboxSql, resolveTable } from "./sql.js";
+import { migrateLockKey, outboxSql, resolveTable } from "./sql.js";
 import type { SqlExecutor, TableOptions } from "./types.js";
 
-/** Creates the outbox table and its indexes if they don't exist. Safe to run on every boot. */
+/**
+ * Creates the outbox table and its indexes if they don't exist. Safe to run on every
+ * boot, from any number of processes at once.
+ *
+ * `IF NOT EXISTS` alone is not enough for that: two sessions that both find the schema,
+ * table or index missing both try to create it, and the slower one fails with a unique
+ * violation on `pg_namespace`, `pg_type` or `pg_class`. So the DDL runs behind a
+ * transaction-scoped advisory lock: one process creates, the rest wait a few
+ * milliseconds and find everything there. The script is sent as one simple-protocol
+ * query, which Postgres runs as one implicit transaction, so the lock is released when
+ * the DDL commits — or, if `db` is already inside your transaction, when that commits.
+ */
 export async function migrate(db: SqlExecutor, options: TableOptions = {}): Promise<void> {
-  await db.query(outboxSql(options));
+  await db.query(
+    `SELECT pg_advisory_xact_lock(${migrateLockKey(options)});\n${outboxSql(options)}`,
+  );
 }
 
 export interface OldestPending {
@@ -50,15 +63,20 @@ export async function outboxStatus(
     dead: number;
     scheduled: number;
   }>(
-    `SELECT
-       count(*) FILTER (WHERE delivered_at IS NULL AND dead_at IS NULL)::int AS pending,
-       count(*) FILTER (WHERE delivered_at IS NULL AND dead_at IS NULL AND locked_until > now())::int AS in_flight,
-       count(*) FILTER (WHERE delivered_at IS NULL AND dead_at IS NULL AND attempts > 0
-                          AND (locked_until IS NULL OR locked_until <= now()))::int AS retrying,
-       count(*) FILTER (WHERE dead_at IS NOT NULL)::int AS dead,
-       count(*) FILTER (WHERE delivered_at IS NULL AND dead_at IS NULL AND due_at > now())::int AS scheduled
-     FROM ${qualified}
-     WHERE delivered_at IS NULL`,
+    // Two scans, each over a partial index that holds only the rows it counts: the
+    // pending rows, then the dead ones. Delivered rows, kept for keepDeliveredMs and often
+    // most of the table, are never read.
+    `SELECT p.pending, p.in_flight, p.retrying, d.dead, p.scheduled
+     FROM (
+       SELECT count(*)::int AS pending,
+              count(*) FILTER (WHERE locked_until > now())::int AS in_flight,
+              count(*) FILTER (WHERE attempts > 0
+                                 AND (locked_until IS NULL OR locked_until <= now()))::int AS retrying,
+              count(*) FILTER (WHERE due_at > now())::int AS scheduled
+       FROM ${qualified}
+       WHERE delivered_at IS NULL AND dead_at IS NULL
+     ) p,
+     (SELECT count(*)::int AS dead FROM ${qualified} WHERE dead_at IS NOT NULL) d`,
   );
   const oldest = await db.query<{
     event_id: string;

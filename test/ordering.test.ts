@@ -62,7 +62,7 @@ describe("ordering across concurrent relays", () => {
         new Relay(db, {
           ...table,
           concurrency: 16,
-          pollIntervalMs: 5,
+          pollIntervalMs: 10,
           onError: (e) => void errors.push(e),
           handler: async (event) => {
             const key = event.key;
