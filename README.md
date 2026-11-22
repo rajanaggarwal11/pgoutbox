@@ -57,7 +57,17 @@ import { migrate } from "pgrelay";
 await migrate(pool); // CREATE TABLE IF NOT EXISTS public.pgrelay_outbox …
 ```
 
-`migrate` is safe to run from every process at once: it takes a transaction-scoped advisory lock, so ten processes booting together create the table once instead of failing on a duplicate catalog entry.
+`migrate` is safe to run from every process at once. When the table and its indexes already exist, it only reads the catalog and returns, taking no lock on the outbox, so a boot never waits behind transactions that are enqueueing. When something is missing, it creates it behind a transaction-scoped advisory lock, so ten processes booting together create the table once instead of failing on a duplicate catalog entry.
+
+Creating an index takes a SHARE lock on the table, which blocks writes to it until the index is built. On a new or small table that is milliseconds. On a large existing one, such as an outbox upgraded to a version with a new index, it is not: on 2 million rows (10,000 pending) each partial index took 0.13–0.15 s to build here, and `delivered` 0.54 s. For a big table, create the indexes `CONCURRENTLY` in a migration first. `npx pgrelay sql` prints each one; add `CONCURRENTLY` and run them outside a transaction:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "pgrelay_outbox_leased"
+  ON "public"."pgrelay_outbox" (locked_until)
+  WHERE locked_until IS NOT NULL AND delivered_at IS NULL AND dead_at IS NULL;
+```
+
+`migrate` then finds everything in place and returns.
 
 ```bash
 npx pgrelay sql > migrations/0007_outbox.sql
@@ -226,7 +236,9 @@ Machine: 13-inch MacBook Pro (Mac14,7), Apple M2, 8 cores, 8 GB, macOS 26.6, Nod
 | 20,000                              | 6.5 ms  | 0.01 ms                  |
 | 200,000                             | 56.8 ms | 0.01 ms                  |
 
-The cost grows linearly with that backlog, about 0.3 µs per waiting event. `assertOutboxHealthy` flags the key as soon as its oldest event has waited longer than `maxLagSeconds`, with the key and its last error.
+The cost grows linearly with that backlog, about 0.3 µs per waiting event, and it caps throughput for every key while the stuck events have lower ids than the ready ones. At 200,000 waiting events, a claim of up to 50 events takes 57 ms, so a busy relay with `concurrency: 50` tops out near 900 events/s, against a median of ~7,800 above. `assertOutboxHealthy` flags the key as soon as its oldest event has waited longer than `maxLagSeconds`, with the key and its last error.
+
+The `leased` index that keeps reaping cheap has a write cost. Each claim adds one entry to it. A failed attempt clears the lease, and because `locked_until` is now indexed, recording the failure can no longer be a HOT update: it writes a new entry to each of the row's indexes (three for an unkeyed event, five for a keyed one) where it used to write none. Deliveries were never HOT, so they cost the same as before. Measured with `pg_stat_user_tables`: 1,000 failures, 1,000 HOT updates without the index, 0 with it.
 
 ## Why not pg-boss, graphile-worker, Debezium or @nestjs/outbox?
 
