@@ -8,13 +8,13 @@ import type { EventInput, SqlExecutor, TableOptions } from "./types.js";
  * That is the one mistake that turns an outbox back into the dual write it exists to
  * prevent: the event commits on its own, whether or not the business write beside it
  * does. It raises no error anywhere else and passes every test that doesn't roll back,
- * so pgrelay refuses it here — and inserts nothing.
+ * so pgoutbox refuses it here — and inserts nothing.
  */
 export class OutsideTransactionError extends Error {
   override name = "OutsideTransactionError";
   constructor() {
     super(
-      "pgrelay: enqueue() was called outside a transaction, so the event would commit on its own " +
+      "pgoutbox: enqueue() was called outside a transaction, so the event would commit on its own " +
         "whether or not your other writes do. Nothing was written. Call it with the client or " +
         "transaction object your BEGIN … COMMIT runs on (pool.connect() + BEGIN, sql.begin(), " +
         "db.transaction()), not with a pool.",
@@ -34,7 +34,7 @@ interface Row {
 }
 
 function toRow(event: EventInput, index: number): Row {
-  const where = `pgrelay: event ${index}`;
+  const where = `pgoutbox: event ${index}`;
   if (typeof event !== "object" || event === null) throw new TypeError(`${where} is not an object`);
   if (typeof event.topic !== "string" || event.topic.length === 0) {
     throw new TypeError(`${where} needs a non-empty string topic`);

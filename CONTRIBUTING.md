@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for looking. pgrelay is small on purpose, and every guarantee in the README has a test against a real Postgres behind it. Contributions that keep it that way are very welcome.
+Thanks for looking. pgoutbox is small on purpose, and every guarantee in the README has a test against a real Postgres behind it. Contributions that keep it that way are very welcome.
 
 ## Setup
 
@@ -8,7 +8,7 @@ You need Node 22.13+, pnpm, and a Postgres 14+ you can create schemas in. The de
 
 ```bash
 pnpm install
-export TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/pgrelay_test
+export TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/pgoutbox_test
 pnpm build   # the crash and CLI tests run the built package
 pnpm test
 ```
@@ -24,4 +24,4 @@ pnpm test
 
 ## Good first issues
 
-Look for the [`good first issue`](https://github.com/rajanaggarwal11/pgrelay/labels/good%20first%20issue) label. If you want to take something bigger, open an issue first so we can agree on the shape.
+Look for the [`good first issue`](https://github.com/rajanaggarwal11/pgoutbox/labels/good%20first%20issue) label. If you want to take something bigger, open an issue first so we can agree on the shape.

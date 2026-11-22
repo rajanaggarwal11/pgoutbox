@@ -10,7 +10,7 @@ let table: TableOptions;
 
 beforeAll(async () => {
   db = pool(40);
-  table = await freshOutbox(db, "pgrelay_ordering");
+  table = await freshOutbox(db, "pgoutbox_ordering");
 });
 
 afterAll(async () => {

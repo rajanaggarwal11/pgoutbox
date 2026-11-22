@@ -31,17 +31,17 @@ function version(): string {
 }
 
 const HELP = `
-pgrelay — a transactional outbox for Postgres
+pgoutbox — a transactional outbox for Postgres
 
 Usage
-  pgrelay sql [options]                      Print the outbox DDL, for a migration file
-  pgrelay status [<connection-url>] [options]  Is anything stuck? Exit 1 if so
+  pgoutbox sql [options]                      Print the outbox DDL, for a migration file
+  pgoutbox status [<connection-url>] [options]  Is anything stuck? Exit 1 if so
 
   The URL may also come from DATABASE_URL, which keeps it out of your shell history.
 
 Options
   --schema <name>       Schema of the outbox table. Default: public
-  --table <name>        Name of the outbox table. Default: pgrelay_outbox
+  --table <name>        Name of the outbox table. Default: pgoutbox
   --max-lag <seconds>   status: how long an event may wait before it counts as stuck. Default: 60
   --allow-dead          status: don't fail on dead events
   --json                status: machine-readable output
@@ -54,8 +54,8 @@ Exit codes
   2  could not run — bad option, no URL, no driver, connection failed
 
 Examples
-  npx pgrelay sql > migrations/0007_outbox.sql
-  DATABASE_URL=postgres://app@db/prod npx pgrelay status --max-lag 300
+  npx pgoutbox sql > migrations/0007_outbox.sql
+  DATABASE_URL=postgres://app@db/prod npx pgoutbox status --max-lag 300
 `;
 
 class UsageError extends Error {}
@@ -77,7 +77,7 @@ async function connect(url: string) {
   try {
     pg = (await import("pg")) as typeof pg;
   } catch {
-    throw new UsageError("pgrelay status needs the pg driver: npm install pg");
+    throw new UsageError("pgoutbox status needs the pg driver: npm install pg");
   }
   // pg is CommonJS; under ESM its exports arrive on `default`.
   const Client = pg.Client ?? pg.default!.Client;
@@ -87,7 +87,7 @@ async function connect(url: string) {
 }
 
 function render(status: OutboxStatus, problems: string[], where: string): string {
-  const lines = [`${bold("pgrelay status")} ${dim(`· ${where}`)}`, ""];
+  const lines = [`${bold("pgoutbox status")} ${dim(`· ${where}`)}`, ""];
   const o = status.oldestPending;
   lines.push(
     `  pending   ${status.pending.toLocaleString("en-US")}${o ? dim(`  (oldest waited ${formatDuration(o.ageSeconds)})`) : ""}`,
@@ -119,7 +119,7 @@ export async function main(argv: string[]): Promise<number> {
       },
     });
   } catch (error) {
-    process.stderr.write(`pgrelay: ${(error as Error).message}\n${HELP}`);
+    process.stderr.write(`pgoutbox: ${(error as Error).message}\n${HELP}`);
     return EXIT_ERROR;
   }
   const { values, positionals } = parsed;
@@ -142,7 +142,7 @@ export async function main(argv: string[]): Promise<number> {
       return EXIT_OK;
     }
     if (command !== "status")
-      throw new UsageError(`unknown command "${command}". Try: pgrelay --help`);
+      throw new UsageError(`unknown command "${command}". Try: pgoutbox --help`);
 
     const rawLag = values["max-lag"];
     const maxLag = rawLag === undefined ? 60 : rawLag.trim() === "" ? NaN : Number(rawLag);
@@ -176,7 +176,7 @@ export async function main(argv: string[]): Promise<number> {
   } catch (error) {
     const message =
       error instanceof UsageError ? error.message : `could not run: ${(error as Error).message}`;
-    process.stderr.write(`pgrelay: ${message}\n`);
+    process.stderr.write(`pgoutbox: ${message}\n`);
     return EXIT_ERROR;
   }
 }

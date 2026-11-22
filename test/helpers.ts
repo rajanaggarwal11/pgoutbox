@@ -4,7 +4,7 @@ import type { TableOptions } from "../src/types.js";
 
 // Named DATABASE_URL, not URL: the latter shadows the global URL constructor.
 export const DATABASE_URL =
-  process.env.TEST_DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/pgrelay_test";
+  process.env.TEST_DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/pgoutbox_test";
 
 export function pool(max = 20): pg.Pool {
   return new pg.Pool({ connectionString: DATABASE_URL, max });

@@ -208,14 +208,14 @@ function sqlState(error: unknown): string | undefined {
 function positiveInt(name: string, value: number | undefined, fallback: number): number {
   const v = value ?? fallback;
   if (!Number.isInteger(v) || v < 1)
-    throw new TypeError(`pgrelay: ${name} must be a positive integer, got ${v}`);
+    throw new TypeError(`pgoutbox: ${name} must be a positive integer, got ${v}`);
   return v;
 }
 
 function nonNegative(name: string, value: number | undefined, fallback: number): number {
   const v = value ?? fallback;
   if (!Number.isFinite(v) || v < 0)
-    throw new TypeError(`pgrelay: ${name} must be a non-negative number, got ${v}`);
+    throw new TypeError(`pgoutbox: ${name} must be a non-negative number, got ${v}`);
   return v;
 }
 
@@ -265,7 +265,7 @@ export class Relay<P = unknown> {
     options: RelayOptions<P>,
   ) {
     if (typeof options?.handler !== "function")
-      throw new TypeError("pgrelay: a relay needs a handler function");
+      throw new TypeError("pgoutbox: a relay needs a handler function");
     this.sql = statements(resolveTable(options).qualified);
     this.handler = options.handler;
     this.concurrency = positiveInt("concurrency", options.concurrency, 10);
@@ -278,12 +278,12 @@ export class Relay<P = unknown> {
       // 0 would make an idle relay re-run its claim query back to back, and anything over
       // MAX_TIMER_MS fires after 1 ms: both are a busy loop against the database.
       throw new TypeError(
-        `pgrelay: pollIntervalMs must be between ${MIN_POLL_INTERVAL_MS} and ${MAX_TIMER_MS} ms, got ${this.pollIntervalMs}`,
+        `pgoutbox: pollIntervalMs must be between ${MIN_POLL_INTERVAL_MS} and ${MAX_TIMER_MS} ms, got ${this.pollIntervalMs}`,
       );
     }
     this.leaseMs = positiveInt("leaseMs", options.leaseMs, 30_000);
     if (this.leaseMs > MAX_TIMER_MS) {
-      throw new TypeError(`pgrelay: leaseMs must be at most ${MAX_TIMER_MS} (about 24.8 days)`);
+      throw new TypeError(`pgoutbox: leaseMs must be at most ${MAX_TIMER_MS} (about 24.8 days)`);
     }
     this.maxAttempts = positiveInt("maxAttempts", options.maxAttempts, 10);
     this.backoff = options.backoff ?? defaultBackoff;
@@ -310,7 +310,7 @@ export class Relay<P = unknown> {
   /** Starts polling in the background. Returns immediately. */
   start(): void {
     if (this.running) return;
-    if (this.loop) throw new Error("pgrelay: start() called while stop() is still finishing");
+    if (this.loop) throw new Error("pgoutbox: start() called while stop() is still finishing");
     this.running = true;
     this.loop = this.run();
   }
@@ -339,7 +339,7 @@ export class Relay<P = unknown> {
    */
   async drain(): Promise<number> {
     if (this.running || this.loop) {
-      throw new Error("pgrelay: drain() cannot run while the relay is started");
+      throw new Error("pgoutbox: drain() cannot run while the relay is started");
     }
     let delivered = 0;
     try {
@@ -457,7 +457,7 @@ export class Relay<P = unknown> {
       ? Number(row.lease_left_ms)
       : this.leaseMs;
     const timer = setTimeout(
-      () => controller.abort(new Error(`pgrelay: lease on event ${event.id} is about to expire`)),
+      () => controller.abort(new Error(`pgoutbox: lease on event ${event.id} is about to expire`)),
       Math.min(MAX_TIMER_MS, Math.max(0, left - margin)),
     );
 

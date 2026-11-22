@@ -25,7 +25,7 @@ let db: pg.Pool;
 
 beforeAll(async () => {
   db = pool();
-  await freshOutbox(db, "pgrelay_cli");
+  await freshOutbox(db, "pgoutbox_cli");
 });
 
 afterAll(async () => {
@@ -34,15 +34,15 @@ afterAll(async () => {
 
 describe("the CLI (built)", () => {
   it("prints the DDL, which Postgres accepts", async () => {
-    const { code, stdout } = await cli("sql", "--schema", "pgrelay_cli", "--table", "from_cli");
+    const { code, stdout } = await cli("sql", "--schema", "pgoutbox_cli", "--table", "from_cli");
     expect(code).toBe(0);
-    expect(stdout).toContain(`CREATE TABLE IF NOT EXISTS "pgrelay_cli"."from_cli"`);
+    expect(stdout).toContain(`CREATE TABLE IF NOT EXISTS "pgoutbox_cli"."from_cli"`);
     await db.query(stdout);
     await db.query(stdout); // idempotent
   });
 
   it("status exits 0 when healthy and 1 when stuck", async () => {
-    const ok = await cli("status", DATABASE_URL, "--schema", "pgrelay_cli", "--table", "outbox");
+    const ok = await cli("status", DATABASE_URL, "--schema", "pgoutbox_cli", "--table", "outbox");
     expect(ok.code).toBe(0);
     expect(ok.stdout).toContain("✓ The outbox is healthy.");
 
@@ -50,11 +50,18 @@ describe("the CLI (built)", () => {
       enqueue(
         tx,
         { topic: "order.created", payload: 1 },
-        { schema: "pgrelay_cli", table: "outbox" },
+        { schema: "pgoutbox_cli", table: "outbox" },
       ),
     );
-    await db.query(`UPDATE pgrelay_cli.outbox SET due_at = now() - interval '10 minutes'`);
-    const stuck = await cli("status", DATABASE_URL, "--schema", "pgrelay_cli", "--table", "outbox");
+    await db.query(`UPDATE pgoutbox_cli.outbox SET due_at = now() - interval '10 minutes'`);
+    const stuck = await cli(
+      "status",
+      DATABASE_URL,
+      "--schema",
+      "pgoutbox_cli",
+      "--table",
+      "outbox",
+    );
     expect(stuck.code).toBe(1);
     expect(stuck.stdout).toMatch(/pending\s+1/);
     expect(stuck.stdout).toContain("Is a relay running against this table?");
@@ -63,7 +70,7 @@ describe("the CLI (built)", () => {
       "status",
       DATABASE_URL,
       "--schema",
-      "pgrelay_cli",
+      "pgoutbox_cli",
       "--table",
       "outbox",
       "--json",
@@ -91,6 +98,6 @@ describe("the CLI (built)", () => {
     expect((await cli("--version")).stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
     const help = await cli("--help");
     expect(help.code).toBe(0);
-    expect(help.stdout).toContain("pgrelay status");
+    expect(help.stdout).toContain("pgoutbox status");
   });
 });

@@ -10,7 +10,7 @@ let table: TableOptions;
 
 beforeEach(async () => {
   db ??= pool();
-  table = await freshOutbox(db, "pgrelay_relay");
+  table = await freshOutbox(db, "pgoutbox_relay");
 });
 
 afterAll(async () => {
@@ -62,12 +62,12 @@ describe("Relay", () => {
     // still invisible and never comes back for it. That is the classic silent loss.
     const slow = await db.connect();
     await slow.query("BEGIN");
-    await slow.query(`INSERT INTO pgrelay_relay.orders VALUES ('a', 1)`);
+    await slow.query(`INSERT INTO pgoutbox_relay.orders VALUES ('a', 1)`);
     const a = await enqueue(slow, { topic: "a", payload: 1 }, table);
 
     const b = await transaction(db, (tx) => enqueue(tx, { topic: "b", payload: 1 }, table));
     const { rows } = await db.query<{ ok: boolean }>(
-      `SELECT (SELECT id FROM pgrelay_relay.outbox WHERE event_id = $1) > 0 AS ok`,
+      `SELECT (SELECT id FROM pgoutbox_relay.outbox WHERE event_id = $1) > 0 AS ok`,
       [b],
     );
     expect(rows[0]!.ok).toBe(true);
@@ -93,7 +93,7 @@ describe("Relay", () => {
       },
     });
     expect(await r.drain()).toBe(0); // failed once; now waiting out the backoff
-    const { rows } = await db.query(`SELECT attempts, last_error FROM pgrelay_relay.outbox`);
+    const { rows } = await db.query(`SELECT attempts, last_error FROM pgoutbox_relay.outbox`);
     expect(rows[0]).toEqual({ attempts: 1, last_error: "Error: broker down (1)" });
     await sleep(80);
     await r.drain();
@@ -159,7 +159,7 @@ describe("Relay", () => {
       await first.stop();
     }
     const { rows } = await db.query(
-      `SELECT attempts, delivered_at IS NOT NULL AS done FROM pgrelay_relay.outbox`,
+      `SELECT attempts, delivered_at IS NOT NULL AS done FROM pgoutbox_relay.outbox`,
     );
     expect(rows[0]).toEqual({ attempts: 2, done: true });
   });
@@ -228,7 +228,7 @@ describe("Relay", () => {
 
     await put(2);
     await relay({ handler: async () => {} }).drain();
-    await db.query(`UPDATE pgrelay_relay.outbox SET delivered_at = now() - interval '2 days'`);
+    await db.query(`UPDATE pgoutbox_relay.outbox SET delivered_at = now() - interval '2 days'`);
     const r = relay({ cleanupIntervalMs: 1, handler: async () => {} });
     r.start();
     for (let i = 0; i < 100 && (await count(db, table)) > 0; i++) await sleep(10);

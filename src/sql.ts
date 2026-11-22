@@ -2,12 +2,12 @@ import { createHash } from "node:crypto";
 import type { TableOptions } from "./types.js";
 
 export const DEFAULT_SCHEMA = "public";
-export const DEFAULT_TABLE = "pgrelay_outbox";
+export const DEFAULT_TABLE = "pgoutbox";
 
 /** Double-quotes an identifier, so a configured table name can never be anything but a name. */
 export function quoteIdent(name: string): string {
-  if (name.length === 0) throw new TypeError("pgrelay: an identifier cannot be empty");
-  if (name.includes("\0")) throw new TypeError("pgrelay: an identifier cannot contain NUL");
+  if (name.length === 0) throw new TypeError("pgoutbox: an identifier cannot be empty");
+  if (name.includes("\0")) throw new TypeError("pgoutbox: an identifier cannot contain NUL");
   return `"${name.replaceAll('"', '""')}"`;
 }
 
@@ -26,7 +26,7 @@ export function resolveTable(options: TableOptions = {}): ResolvedTable {
 
 /**
  * The advisory lock key `migrate` holds while it runs the DDL: the first 8 bytes of
- * SHA-256 over `pgrelay migrate <schema>`, as a signed bigint literal. Fixed for a schema,
+ * SHA-256 over `pgoutbox migrate <schema>`, as a signed bigint literal. Fixed for a schema,
  * so every process migrating into it queues on the same lock.
  *
  * Keyed on the schema rather than the table: `CREATE SCHEMA`, the table's row type and
@@ -36,7 +36,7 @@ export function resolveTable(options: TableOptions = {}): ResolvedTable {
 export function migrateLockKey(options: TableOptions = {}): string {
   const { schema } = resolveTable(options);
   return createHash("sha256")
-    .update(`pgrelay migrate ${schema}`)
+    .update(`pgoutbox migrate ${schema}`)
     .digest()
     .readBigInt64BE(0)
     .toString();
@@ -44,7 +44,7 @@ export function migrateLockKey(options: TableOptions = {}): string {
 
 /**
  * The DDL for the outbox: one table and its partial indexes. Idempotent, so it can
- * be run on every boot (`migrate`) or pasted into a migration file (`npx pgrelay sql`).
+ * be run on every boot (`migrate`) or pasted into a migration file (`npx pgoutbox sql`).
  *
  * Design notes, because each column is there for a reason:
  *
@@ -121,7 +121,7 @@ export function outboxIndexes(options: TableOptions = {}): OutboxIndex[] {
     // which IF NOT EXISTS would then silently skip. Refuse instead.
     if (Buffer.byteLength(relname) > 63) {
       throw new TypeError(
-        `pgrelay: table name "${table}" is too long — index "${relname}" would exceed 63 bytes`,
+        `pgoutbox: table name "${table}" is too long — index "${relname}" would exceed 63 bytes`,
       );
     }
     return { relname, name: quoteIdent(relname) };

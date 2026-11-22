@@ -154,7 +154,7 @@ export class OutboxUnhealthyError extends Error {
     readonly problems: string[],
     readonly status: OutboxStatus,
   ) {
-    super(`pgrelay: the outbox is not healthy.\n\n${problems.map((p) => `  ✗ ${p}`).join("\n")}`);
+    super(`pgoutbox: the outbox is not healthy.\n\n${problems.map((p) => `  ✗ ${p}`).join("\n")}`);
   }
 }
 

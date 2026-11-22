@@ -26,8 +26,8 @@ beforeAll(async () => {
   if (!existsSync(DIST))
     throw new Error("crash.test.ts runs the built package: run `pnpm build` first");
   db = pool();
-  table = await freshOutbox(db, "pgrelay_crash");
-  dir = mkdtempSync(join(tmpdir(), "pgrelay-crash-"));
+  table = await freshOutbox(db, "pgoutbox_crash");
+  dir = mkdtempSync(join(tmpdir(), "pgoutbox-crash-"));
 });
 
 afterAll(async () => {
@@ -36,7 +36,9 @@ afterAll(async () => {
 });
 
 function worker(log: string): ChildProcess {
-  return spawn(process.execPath, [WORKER, DATABASE_URL, "pgrelay_crash", log], { stdio: "ignore" });
+  return spawn(process.execPath, [WORKER, DATABASE_URL, "pgoutbox_crash", log], {
+    stdio: "ignore",
+  });
 }
 
 function exited(child: ChildProcess): Promise<void> {

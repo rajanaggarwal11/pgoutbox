@@ -6,7 +6,7 @@ import { migrate } from "../src/health.js";
 import { withPostgresJs } from "../src/postgres-js.js";
 import { DATABASE_URL } from "./helpers.js";
 
-const schema = "pgrelay_migrate";
+const schema = "pgoutbox_migrate";
 let db: pg.Pool;
 
 beforeAll(() => {
@@ -112,6 +112,29 @@ describe("migrate", () => {
     await db.query(`DROP INDEX "${schema}".outbox_leased`);
     await migrate(db, table);
     expect(await indexes()).toContain("outbox_leased");
+  });
+
+  it("defaults to public.pgoutbox, with indexes named after it", async () => {
+    await db.query(`DROP TABLE IF EXISTS public.pgoutbox`);
+    try {
+      await migrate(db);
+      const { rows } = await db.query<{ indexname: string }>(
+        `SELECT indexname FROM pg_indexes
+         WHERE schemaname = 'public' AND tablename = 'pgoutbox' ORDER BY indexname`,
+      );
+      expect(rows.map((r) => r.indexname)).toEqual([
+        "pgoutbox_dead",
+        "pgoutbox_delivered",
+        "pgoutbox_event_id_key",
+        "pgoutbox_key_holder",
+        "pgoutbox_leased",
+        "pgoutbox_pending",
+        "pgoutbox_pending_key",
+        "pgoutbox_pkey",
+      ]);
+    } finally {
+      await db.query(`DROP TABLE IF EXISTS public.pgoutbox`);
+    }
   });
 
   it("holds the lock only until the DDL commits", async () => {
