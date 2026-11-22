@@ -1,7 +1,7 @@
 {
   "name": "pgrelay",
   "version": "0.0.0",
-  "description": "A transactional outbox for Postgres that proves it. Events commit with your data or not at all, are never skipped by a late commit, stay in order per key, and survive kill -9.",
+  "description": "A transactional outbox for Postgres. Events commit with your data or not at all, are never skipped by a late commit, stay in order per key, and survive kill -9.",
   "keywords": [
     "outbox",
     "transactional-outbox",
@@ -67,6 +67,7 @@
     "check": "pnpm lint && pnpm typecheck && pnpm build && pnpm test",
     "attw": "attw --pack . --ignore-rules no-resolution cjs-resolves-to-esm",
     "publint": "publint",
+    "bench": "pnpm build && node bench/throughput.mjs && node bench/stuck-key.mjs",
     "prepublishOnly": "pnpm build"
   },
   "peerDependencies": {

@@ -58,14 +58,16 @@ function toSql(text: string, params: readonly unknown[]): SQL {
  * ```ts
  * await db.transaction(async (tx) => {
  *   await tx.insert(orders).values(order);
- *   await enqueue(drizzle(tx), { topic: "order.created", key: order.id, payload: order });
+ *   await enqueue(withDrizzle(tx), { topic: "order.created", key: order.id, payload: order });
  * });
+ *
+ * new Relay(withDrizzle(db), { handler }).start();
  * ```
  *
- * Pass the `tx`, not `db`: `enqueue(drizzle(db), …)` runs outside your transaction
+ * Pass the `tx`, not `db`: `enqueue(withDrizzle(db), …)` runs outside your transaction
  * and is refused with `OutsideTransactionError`.
  */
-export function drizzle(db: DrizzleExecutable): SqlExecutor {
+export function withDrizzle(db: DrizzleExecutable): SqlExecutor {
   return {
     async query<T = Record<string, unknown>>(text: string, params: readonly unknown[] = []) {
       const result = (await db.execute(toSql(text, params))) as

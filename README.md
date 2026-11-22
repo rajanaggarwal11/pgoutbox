@@ -1,12 +1,14 @@
 # pgrelay
 
-**A transactional outbox for Postgres that proves it.** Events commit with your data or not at all, are never skipped by a transaction that commits late, stay in order per key across any number of relays — and the test suite kills relays with `kill -9` mid-delivery to show nothing is lost.
+**A transactional outbox for Postgres.** Events commit with your data or not at all, are never skipped by a transaction that commits late, stay in order per key across any number of relays — and the test suite kills relays with `kill -9` mid-delivery to show nothing is lost.
 
 [![CI](https://github.com/rajanaggarwal11/pgrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/rajanaggarwal11/pgrelay/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/rajanaggarwal11/pgrelay/actions/workflows/codeql.yml/badge.svg)](https://github.com/rajanaggarwal11/pgrelay/actions/workflows/codeql.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 ```ts
+import { enqueue, Relay } from "pgrelay";
+
 // In the transaction that changes your data
 await client.query("BEGIN");
 await client.query("INSERT INTO orders (id, total) VALUES ($1, $2)", [order.id, order.total]);
@@ -27,7 +29,7 @@ kill -9 × 24: 2200 events, 149 taken over from a killed relay, 4 delivered twic
 
 ## Why an outbox
 
-You save an order, then publish `order.created`. Between those two steps the process can die, the broker can be down, or the transaction can roll back after the publish went out. Every one of those fails silently: a customer with no confirmation email, a warehouse shipping an order that doesn't exist. An outbox writes the event **into the same transaction** as the order, and a relay delivers it after commit. One commit, one truth.
+You save an order, then publish `order.created`. Between those two steps the process can die, the broker can be down, or the transaction can roll back after the publish went out. Every one of those fails silently: a customer with no confirmation email, a warehouse shipping an order that doesn't exist. An outbox writes the event **into the same transaction** as the order, and a relay delivers it after commit, so the event exists if and only if the order does.
 
 The idea is simple. The ways to get it subtly wrong are not, and each one is silent:
 
@@ -50,8 +52,22 @@ Works with [node-postgres](https://node-postgres.com), [postgres.js](https://git
 Create the table once — on boot, or in a migration:
 
 ```ts
+import { migrate } from "pgrelay";
+
 await migrate(pool); // CREATE TABLE IF NOT EXISTS public.pgrelay_outbox …
 ```
+
+`migrate` is safe to run from every process at once. When the table and its indexes already exist, it only reads the catalog and returns, taking no lock on the outbox, so a boot never waits behind transactions that are enqueueing. When something is missing, it creates it behind a transaction-scoped advisory lock, so ten processes booting together create the table once instead of failing on a duplicate catalog entry.
+
+Creating an index takes a SHARE lock on the table, which blocks writes to it until the index is built. On a new or small table that is milliseconds. On a large existing one, such as an outbox upgraded to a version with a new index, it is not: on 2 million rows (10,000 pending) each partial index took 0.13–0.15 s to build here, and `delivered` 0.54 s. For a big table, create the indexes `CONCURRENTLY` in a migration first. `npx pgrelay sql` prints each one; add `CONCURRENTLY` and run them outside a transaction:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "pgrelay_outbox_leased"
+  ON "public"."pgrelay_outbox" (locked_until)
+  WHERE locked_until IS NOT NULL AND delivered_at IS NULL AND dead_at IS NULL;
+```
+
+`migrate` then finds everything in place and returns.
 
 ```bash
 npx pgrelay sql > migrations/0007_outbox.sql
@@ -83,23 +99,39 @@ try {
 **postgres.js**
 
 ```ts
-import { postgresJs } from "pgrelay/postgres-js";
+import postgres from "postgres";
+import { enqueue, migrate, Relay } from "pgrelay";
+import { withPostgresJs } from "pgrelay/postgres-js";
+
+const sql = postgres(process.env.DATABASE_URL!);
+await migrate(withPostgresJs(sql));
 
 await sql.begin(async (tx) => {
   await tx`INSERT INTO orders ${tx(order)}`;
-  await enqueue(postgresJs(tx), { topic: "order.created", key: order.id, payload: order });
+  await enqueue(withPostgresJs(tx), { topic: "order.created", key: order.id, payload: order });
 });
+
+// The relay gets the top-level sql: it runs each statement on its own.
+new Relay(withPostgresJs(sql), { handler: async (event) => publish(event) }).start();
 ```
 
-**Drizzle**
+**Drizzle** (over node-postgres or postgres.js)
 
 ```ts
-import { drizzle } from "pgrelay/drizzle";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { enqueue, migrate, Relay } from "pgrelay";
+import { withDrizzle } from "pgrelay/drizzle";
+
+const db = drizzle(process.env.DATABASE_URL!);
+await migrate(withDrizzle(db));
 
 await db.transaction(async (tx) => {
   await tx.insert(orders).values(order);
-  await enqueue(drizzle(tx), { topic: "order.created", key: order.id, payload: order });
+  await enqueue(withDrizzle(tx), { topic: "order.created", key: order.id, payload: order });
 });
+
+// The relay gets db, not a transaction.
+new Relay(withDrizzle(db), { handler: async (event) => publish(event) }).start();
 ```
 
 Pass the transaction, never the pool or `db`. If you get it wrong:
@@ -138,7 +170,7 @@ Resolve to mark an event delivered; throw to retry it with exponential backoff. 
 | `leaseMs`           | `30000`                            | How long a claimed event belongs to this relay. If the process dies, another relay takes over after this                                      |
 | `maxAttempts`       | `10`                               | Attempts before an event is marked dead and set aside. A claim whose relay died counts, so an event that crashes every relay is set aside too |
 | `backoff`           | 0.5–1 s, doubling, capped at 5 min | `(attempt) => ms` before the next attempt                                                                                                     |
-| `pollIntervalMs`    | `1000`                             | Idle wait between polls. `relay.wake()` cuts it short                                                                                         |
+| `pollIntervalMs`    | `1000`                             | Idle wait between polls, at least 10 ms. `relay.wake()` cuts it short                                                                         |
 | `keepDeliveredMs`   | 24 h                               | Delivered rows are kept this long for inspection, then deleted. `0` deletes on delivery                                                       |
 | `cleanupIntervalMs` | `60000`                            | How often delivered rows past `keepDeliveredMs` are deleted                                                                                   |
 | `schema`, `table`   | `public`, `pgrelay_outbox`         | Where the outbox lives                                                                                                                        |
@@ -185,16 +217,38 @@ Exit codes: `0` healthy, `1` stuck or dead events, `2` could not run. `--json` f
 
 ## Performance
 
-On a MacBook with a local Postgres 18 (durable commits) and a handler that does nothing, so this measures pgrelay itself:
+Measured with [`bench/`](./bench) (`BENCH_DATABASE_URL=… pnpm bench`) and a handler that does nothing, so this measures pgrelay and Postgres, not a broker.
 
-|                                                            |                                         |
-| ---------------------------------------------------------- | --------------------------------------- |
-| `enqueue`, one event, after the transaction's other writes | ~2,500 transactions/s on one connection |
-| One relay, `concurrency: 50`, no keys                      | ~17,000 events/s                        |
-| One relay, `concurrency: 50`, 1,000 keys                   | ~15,500 events/s                        |
-| Four relays, `concurrency: 50` each, 1,000 keys            | ~23,000 events/s                        |
+Machine: 13-inch MacBook Pro (Mac14,7), Apple M2, 8 cores, 8 GB, macOS 26.6, Node 24.4. Postgres 18.4 on the same machine, from the EDB installer, which is an x86_64 build running under Rosetta 2. Settings are `initdb` defaults: `fsync` and `synchronous_commit` on, `shared_buffers` 128 MB, `wal_sync_method` `open_datasync` (on macOS this does not flush the drive's own write cache; `fsync_writethrough` does). The machine was not idle while measuring (load average 5–15 from other work) and runs varied widely, so each row shows the median and the range of five runs:
 
-Your broker will be the bottleneck long before the outbox is.
+|                                                                    | Median                | Range of 5 runs |
+| ------------------------------------------------------------------ | --------------------- | --------------- |
+| `enqueue`, one event, after the transaction's other writes, 1 conn | ~2,000 transactions/s | 1,600–2,600     |
+| One relay, `concurrency: 50`, no keys                              | ~7,800 events/s       | 4,900–10,400    |
+| One relay, `concurrency: 50`, 1,000 keys                           | ~7,800 events/s       | 5,200–9,000     |
+| Four relays, `concurrency: 50` each, 1,000 keys                    | ~8,800 events/s       | 6,500–11,100    |
+
+**A key stuck behind a retry.** While a key's first event waits to retry, every later event for that key waits behind it, and each claim passes over them once. Cost per claim (`concurrency: 50`) with 1,000 ready events for other keys queued after the stuck ones, from `EXPLAIN (ANALYZE, BUFFERS)`:
+
+| Events waiting behind the stuck key | Claim   | Reaping abandoned leases |
+| ----------------------------------- | ------- | ------------------------ |
+| 2,000                               | 1.9 ms  | 0.01 ms                  |
+| 20,000                              | 6.5 ms  | 0.01 ms                  |
+| 200,000                             | 56.8 ms | 0.01 ms                  |
+
+The cost grows linearly with that backlog, about 0.3 µs per waiting event, and it caps throughput for every key while the stuck events have lower ids than the ready ones. At 200,000 waiting events, a claim of up to 50 events takes 57 ms, so a busy relay with `concurrency: 50` tops out near 900 events/s, against a median of ~7,800 above. `assertOutboxHealthy` flags the key as soon as its oldest event has waited longer than `maxLagSeconds`, with the key and its last error.
+
+The `leased` index that keeps reaping cheap has a write cost. Each claim adds one entry to it. A failed attempt clears the lease, and because `locked_until` is now indexed, recording the failure can no longer be a HOT update: it writes a new entry to each of the row's indexes (three for an unkeyed event, five for a keyed one) where it used to write none. Deliveries were never HOT, so they cost the same as before. Measured with `pg_stat_user_tables`: 1,000 failures, 1,000 HOT updates without the index, 0 with it.
+
+## Why not pg-boss, graphile-worker, Debezium or @nestjs/outbox?
+
+If you already run one of them, you may not need pgrelay.
+
+- **[pg-boss](https://github.com/timgit/pg-boss)** and **[graphile-worker](https://github.com/graphile/worker)** are job queues: a row is work for a worker to do, and they come with what job queues need, such as scheduling, cron and priorities. Both can add a job inside your transaction, which gives you most of an outbox. Per-key order is opt-in: pg-boss has a `key_strict_fifo` queue policy, and graphile-worker runs jobs that share a named queue one at a time, but advises against high-cardinality queue names such as ids. pgrelay records events, facts that already happened, and orders every keyed event by default, with keys meant to be aggregate ids: one per order, account or user.
+- **[Debezium](https://debezium.io)** reads the write-ahead log through logical decoding and a replication slot, and its outbox event router turns outbox rows into Kafka messages keyed by aggregate id. Nothing polls, and if you run Kafka Connect already it is the established choice. It needs that infrastructure, and the replication slot keeps WAL on the server while the connector is down. pgrelay is a library in your Node process and delivers to whatever your handler calls.
+- **[@nestjs/outbox](https://github.com/nestjs/outbox)** is a transactional outbox built as a Nest module, with Postgres and MySQL stores and an inbox for deduplication. On NestJS it fits right in. pgrelay doesn't need a framework; it takes a `pg` client, postgres.js or Drizzle.
+
+What pgrelay adds is that its guarantees are tests against a real Postgres: no event skipped by a late commit, one event per key at a time enforced by a unique index, and nothing lost when relays are killed with `kill -9` mid-delivery. The table at the top lists them.
 
 ## Design notes
 
@@ -207,6 +261,8 @@ Your broker will be the bottleneck long before the outbox is.
 ## Reviewed adversarially
 
 Before the first release, an independent review tried to break each guarantee against a real Postgres. It found a late-commit ordering hole, false "stuck" alarms for delayed events, and an `onError` that could crash the process. All are fixed, and each reproduction lives on as a regression test in [`test/edges.test.ts`](./test/edges.test.ts).
+
+A second audit, also before the first release, measured the queries every relay runs on every poll. The claim query was quadratic in a stuck key's backlog: 20,000 events behind one retrying event made each claim take 11 s. Reaping abandoned leases and `outboxStatus` scanned the whole table, including the delivered rows kept for inspection. And `migrate`, run from ten processes at once on a fresh schema, failed 138 times in 200 with a unique violation on a catalog table. All are fixed; [`test/plans.test.ts`](./test/plans.test.ts) checks the query costs and [`test/migrate.test.ts`](./test/migrate.test.ts) the concurrent boot.
 
 ## Development
 

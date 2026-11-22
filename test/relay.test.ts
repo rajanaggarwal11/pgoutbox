@@ -241,4 +241,15 @@ describe("Relay", () => {
     expect(() => relay({ handler: async () => {}, concurrency: 0 })).toThrow(/concurrency/);
     expect(() => relay({ handler: async () => {}, leaseMs: 1.5 })).toThrow(/leaseMs/);
   });
+
+  it("refuses a poll interval that would make an idle relay a busy loop", () => {
+    // 0 re-ran the claim query back to back; over 2^31-1 ms, setTimeout fires after 1 ms.
+    for (const pollIntervalMs of [0, 5, -1, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 31]) {
+      expect(() => relay({ handler: async () => {}, pollIntervalMs })).toThrow(
+        /pollIntervalMs must be between 10 and 2147483647 ms/,
+      );
+    }
+    expect(() => relay({ handler: async () => {}, pollIntervalMs: 10 })).not.toThrow();
+    expect(() => relay({ handler: async () => {}, pollIntervalMs: undefined })).not.toThrow();
+  });
 });

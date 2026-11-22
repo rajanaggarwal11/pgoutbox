@@ -12,7 +12,7 @@ const relay = new Relay(db, {
   schema,
   table: "outbox",
   concurrency: 8,
-  pollIntervalMs: 5,
+  pollIntervalMs: 10,
   leaseMs: 400,
   onError: () => {},
   handler: async (event) => {

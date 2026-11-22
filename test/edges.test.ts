@@ -1,7 +1,7 @@
 import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
 import type pg from "pg";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { drizzle } from "../src/drizzle.js";
+import { withDrizzle } from "../src/drizzle.js";
 import { enqueue } from "../src/enqueue.js";
 import { assertOutboxHealthy, migrate, outboxStatus } from "../src/health.js";
 import { Relay, type RelayOptions } from "../src/relay.js";
@@ -316,8 +316,10 @@ describe("lifecycle and adapters", () => {
     const odd = { schema: "pgrelay_edges", table: "events$2" };
     await migrate(db, odd);
     const d = drizzlePg(db);
-    await d.transaction((tx) => enqueue(drizzle(tx), { topic: "t", payload: { a: "$1" } }, odd));
-    expect(await new Relay(drizzle(d), { ...odd, handler: async () => {} }).drain()).toBe(1);
+    await d.transaction((tx) =>
+      enqueue(withDrizzle(tx), { topic: "t", payload: { a: "$1" } }, odd),
+    );
+    expect(await new Relay(withDrizzle(d), { ...odd, handler: async () => {} }).drain()).toBe(1);
   });
 
   it("refuses a table name whose index names Postgres would truncate", () => {

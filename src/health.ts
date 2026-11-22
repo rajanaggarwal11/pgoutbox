@@ -1,9 +1,49 @@
-import { outboxSql, resolveTable } from "./sql.js";
+import { migrateLockKey, outboxIndexes, outboxSql, resolveTable } from "./sql.js";
 import type { SqlExecutor, TableOptions } from "./types.js";
 
-/** Creates the outbox table and its indexes if they don't exist. Safe to run on every boot. */
+/**
+ * Creates the outbox table and its indexes if they don't exist. Safe to run on every
+ * boot, from any number of processes at once.
+ *
+ * When everything already exists — every boot after the first — it only looks, with
+ * one catalog query that takes no lock on the outbox, so a boot never waits behind (or
+ * holds up) transactions writing to it. `CREATE INDEX IF NOT EXISTS` would take
+ * a SHARE lock on the table before finding the index there, queueing behind any open
+ * transaction that has enqueued and making every later enqueue and claim queue behind it.
+ *
+ * When something is missing, it creates it. `IF NOT EXISTS` alone is not safe for that:
+ * two sessions that both find the schema, table or index missing both try to create it,
+ * and the slower one fails with a unique violation on `pg_namespace`, `pg_type` or
+ * `pg_class`. So the DDL runs behind a transaction-scoped advisory lock: one process
+ * creates, the rest wait for it and find everything there. The script is sent as one
+ * simple-protocol query, which Postgres runs as one implicit transaction, so the lock is
+ * released when the DDL commits — or, if `db` is already inside your transaction, when
+ * that commits. Building an index on a large existing table blocks writes to it while it
+ * builds; see the README for creating them `CONCURRENTLY` instead.
+ */
 export async function migrate(db: SqlExecutor, options: TableOptions = {}): Promise<void> {
-  await db.query(outboxSql(options));
+  const { schema, table } = resolveTable(options);
+  const relnames = [table, ...outboxIndexes(options).map((index) => index.relname)];
+  // A plain catalog query rather than to_regclass(): a lookup of a schema that does not
+  // exist yet would leave a negative entry in this connection's catalog cache, and the
+  // CREATE SCHEMA IF NOT EXISTS below could then trust it.
+  const { rows } = await db.query<{ found: number }>(
+    `SELECT count(*)::int AS found
+     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = $1 AND c.relname IN (SELECT jsonb_array_elements_text($2::text::jsonb))`,
+    [schema, JSON.stringify(relnames)],
+  );
+  if (Number(rows[0]?.found) === relnames.length) return;
+  // The advisory lock is not a relation lock, so taking it does not make this transaction
+  // process the catalog changes other sessions committed while it waited. Opening
+  // pg_namespace does — Postgres catches up on invalidations whenever a transaction first
+  // locks a relation — so the IF NOT EXISTS checks below see what the process before this
+  // one created, instead of a cached "not there".
+  await db.query(
+    `SELECT pg_advisory_xact_lock(${migrateLockKey(options)});
+SELECT FROM pg_catalog.pg_namespace LIMIT 0;
+${outboxSql(options)}`,
+  );
 }
 
 export interface OldestPending {
@@ -50,15 +90,20 @@ export async function outboxStatus(
     dead: number;
     scheduled: number;
   }>(
-    `SELECT
-       count(*) FILTER (WHERE delivered_at IS NULL AND dead_at IS NULL)::int AS pending,
-       count(*) FILTER (WHERE delivered_at IS NULL AND dead_at IS NULL AND locked_until > now())::int AS in_flight,
-       count(*) FILTER (WHERE delivered_at IS NULL AND dead_at IS NULL AND attempts > 0
-                          AND (locked_until IS NULL OR locked_until <= now()))::int AS retrying,
-       count(*) FILTER (WHERE dead_at IS NOT NULL)::int AS dead,
-       count(*) FILTER (WHERE delivered_at IS NULL AND dead_at IS NULL AND due_at > now())::int AS scheduled
-     FROM ${qualified}
-     WHERE delivered_at IS NULL`,
+    // Two scans, each over a partial index that holds only the rows it counts: the
+    // pending rows, then the dead ones. Delivered rows, kept for keepDeliveredMs and often
+    // most of the table, are never read.
+    `SELECT p.pending, p.in_flight, p.retrying, d.dead, p.scheduled
+     FROM (
+       SELECT count(*)::int AS pending,
+              count(*) FILTER (WHERE locked_until > now())::int AS in_flight,
+              count(*) FILTER (WHERE attempts > 0
+                                 AND (locked_until IS NULL OR locked_until <= now()))::int AS retrying,
+              count(*) FILTER (WHERE due_at > now())::int AS scheduled
+       FROM ${qualified}
+       WHERE delivered_at IS NULL AND dead_at IS NULL
+     ) p,
+     (SELECT count(*)::int AS dead FROM ${qualified} WHERE dead_at IS NOT NULL) d`,
   );
   const oldest = await db.query<{
     event_id: string;
