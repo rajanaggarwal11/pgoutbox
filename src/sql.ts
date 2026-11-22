@@ -73,18 +73,11 @@ export function migrateLockKey(options: TableOptions = {}): string {
  *    kept for inspection.
  */
 export function outboxSql(options: TableOptions = {}): string {
-  const { schema, table, qualified } = resolveTable(options);
-  const idx = (suffix: string) => {
-    const name = `${table}_${suffix}`;
-    // Postgres truncates identifiers to 63 bytes, and two truncated names could collide,
-    // which IF NOT EXISTS would then silently skip. Refuse instead.
-    if (Buffer.byteLength(name) > 63) {
-      throw new TypeError(
-        `pgrelay: table name "${table}" is too long — index "${name}" would exceed 63 bytes`,
-      );
-    }
-    return quoteIdent(name);
-  };
+  const { schema, qualified } = resolveTable(options);
+  const indexes = outboxIndexes(options).map(
+    (i) =>
+      `CREATE ${i.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${i.name}\n  ON ${qualified} ${i.on};`,
+  );
   return `CREATE SCHEMA IF NOT EXISTS ${quoteIdent(schema)};
 
 CREATE TABLE IF NOT EXISTS ${qualified} (
@@ -105,24 +98,53 @@ CREATE TABLE IF NOT EXISTS ${qualified} (
   dead_at       timestamptz
 );
 
-CREATE INDEX IF NOT EXISTS ${idx("pending")}
-  ON ${qualified} (id) WHERE delivered_at IS NULL AND dead_at IS NULL;
-
-CREATE INDEX IF NOT EXISTS ${idx("pending_key")}
-  ON ${qualified} (key, id) WHERE delivered_at IS NULL AND dead_at IS NULL AND key IS NOT NULL;
-
-CREATE UNIQUE INDEX IF NOT EXISTS ${idx("key_holder")}
-  ON ${qualified} (key)
-  WHERE key IS NOT NULL AND attempts > 0 AND delivered_at IS NULL AND dead_at IS NULL;
-
-CREATE INDEX IF NOT EXISTS ${idx("leased")}
-  ON ${qualified} (locked_until)
-  WHERE locked_until IS NOT NULL AND delivered_at IS NULL AND dead_at IS NULL;
-
-CREATE INDEX IF NOT EXISTS ${idx("dead")}
-  ON ${qualified} (id) WHERE dead_at IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS ${idx("delivered")}
-  ON ${qualified} (delivered_at) WHERE delivered_at IS NOT NULL;
+${indexes.join("\n\n")}
 `;
+}
+
+interface OutboxIndex {
+  /** `<table>_<suffix>`, unquoted. Indexes live in the table's schema. */
+  relname: string;
+  /** The same, quoted for SQL. */
+  name: string;
+  unique: boolean;
+  /** Everything after `ON <table>`: columns and predicate. */
+  on: string;
+}
+
+/** The outbox's own indexes, in creation order. The DDL and `migrate`'s check share it. */
+export function outboxIndexes(options: TableOptions = {}): OutboxIndex[] {
+  const { table } = resolveTable(options);
+  const idx = (suffix: string) => {
+    const relname = `${table}_${suffix}`;
+    // Postgres truncates identifiers to 63 bytes, and two truncated names could collide,
+    // which IF NOT EXISTS would then silently skip. Refuse instead.
+    if (Buffer.byteLength(relname) > 63) {
+      throw new TypeError(
+        `pgrelay: table name "${table}" is too long — index "${relname}" would exceed 63 bytes`,
+      );
+    }
+    return { relname, name: quoteIdent(relname) };
+  };
+  const pending = "delivered_at IS NULL AND dead_at IS NULL";
+  return [
+    { ...idx("pending"), unique: false, on: `(id) WHERE ${pending}` },
+    {
+      ...idx("pending_key"),
+      unique: false,
+      on: `(key, id) WHERE ${pending} AND key IS NOT NULL`,
+    },
+    {
+      ...idx("key_holder"),
+      unique: true,
+      on: `(key)\n  WHERE key IS NOT NULL AND attempts > 0 AND ${pending}`,
+    },
+    {
+      ...idx("leased"),
+      unique: false,
+      on: `(locked_until)\n  WHERE locked_until IS NOT NULL AND ${pending}`,
+    },
+    { ...idx("dead"), unique: false, on: `(id) WHERE dead_at IS NOT NULL` },
+    { ...idx("delivered"), unique: false, on: `(delivered_at) WHERE delivered_at IS NOT NULL` },
+  ];
 }
