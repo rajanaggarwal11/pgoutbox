@@ -8,17 +8,17 @@ import type { SqlExecutor } from "./types.js";
  * ```ts
  * await sql.begin(async (tx) => {
  *   await tx`INSERT INTO orders ${tx(order)}`;
- *   await enqueue(postgresJs(tx), { topic: "order.created", key: order.id, payload: order });
+ *   await enqueue(withPostgresJs(tx), { topic: "order.created", key: order.id, payload: order });
  * });
  *
- * new Relay(postgresJs(sql), { handler }).start();
+ * new Relay(withPostgresJs(sql), { handler }).start();
  * ```
  *
  * Passing the top-level `sql` to `enqueue` is the dual-write mistake — each statement
  * would run on whatever pooled connection is free, outside your transaction — and
  * `enqueue` refuses it with `OutsideTransactionError`.
  */
-export function postgresJs(sql: Sql | TransactionSql): SqlExecutor {
+export function withPostgresJs(sql: Sql | TransactionSql): SqlExecutor {
   return {
     async query<T = Record<string, unknown>>(text: string, params: readonly unknown[] = []) {
       const result = await sql.unsafe(text, params as Parameters<Sql["unsafe"]>[1]);
